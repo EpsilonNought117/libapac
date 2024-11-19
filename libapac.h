@@ -5,9 +5,6 @@
     LIBC HEADERS
 */
 
-#include <stdlib.h>
-#include <stdint.h>
-
 #ifndef REPORT_ERR
 #include <stdio.h>
 #define REPORT_ERR(stream, fmt, ...) fprintf(stream, fmt, ##__VA_ARGS__)
@@ -28,6 +25,8 @@
 
 #endif
 
+#include <stdlib.h>
+#include <stdint.h>
 #include <limits.h>
 #include <string.h>
 
@@ -140,9 +139,7 @@ u64 inline apz_limit_mod_exp(apz_t *op1, apz_t *op2);
  *  APZ HIGH LEVEL BASIC ARITHMETIC FUNCTIONS
  */
 
-///@note returns the big integer with the greater absolute value among the two
-///@note returns 1 if abs(op1) >= abs(op2), else if abs(op1) <= abs(op2) returns 0
-uint8_t apz_abs_greater(const apz_t *op1, const apz_t *op2);
+int8_t apz_abs_greater(const apz_t *op1, const apz_t *op2);
 
 /// @note result = op1 + op2
 /// @note result sign set according to values of op1 and op2
@@ -174,46 +171,25 @@ libapac_err apz_hl_mul_neg64(apz_t *result, const apz_t *op1, const uint64_t val
  *   APZ LOW LEVEL FUNCTIONS SPECIFIC TO x64 ARCH
  */
 
-/**
- * @result result_arr[limb] = abs(op1_arr[limb]) + abs(op2_arr[limb])
- *
- * @note adds seg_count number of limbs of op1_arr to op2_arr and returns a carry if produced (1) otherwise (0)
- * @warning result_arr should not overlap with either of the operand arrays
- */
-uint8_t apz_abs_add_x64(u64 *result_arr, const u64 *op1_arr, const u64 *op2_arr, u64 seg_count);
+uint8_t apz_abs_add_x64(u64 *result_arr, const u64 *op1, const u64 *op2, u64 seg_count);
 
-/**
- * @result result = abs(op1_arr) + abs(val)
- *
- * @note assumes result_arr has at least seg_count number of limbs
- * @warning result_arr should not overlap with either of the operand arrays
- */
 uint8_t apz_abs_add_ui_x64(u64 *result_arr, const u64 *op1_arr, u64 val, u64 seg_count);
 
-/**
- * @result result_arr[limb] = abs(op1_arr[limb]) - abs(op2_arr[limb])
- *
- * @note subtracts seg_count number of limbs of op1_arr from op2_arr and returns a borrow if produced (1) otherwise (0)
- * @warning result_arr should not overlap with either of the operand arrays
- */
-uint8_t apz_abs_sub_x64(u64 *result_arr, const u64 *op1_arr, const u64 *op2_arr, u64 seg_count);
+uint8_t apz_abs_sub_x64(u64 *result, const u64 *op1, const u64 *op2, u64 op1_size, u64 op2_size);
 
-/**
- * @result result = op1 * op2, each operand having seg_count limbs
- *
- * @note caller has to assure result arr has (seg_count * 2) limbs
- * @warning result_arr should not overlap with either of the operand arrays
- */
+void apz_mul_ui_x64(u64 *result, const u64 *op1, u64 op1_size, u64 val);
+
 void apz_mul_basecase_x64(u64 *result_arr, const u64 *arr1, const u64 *arr2, u64 arr1_size, u64 arr2_size);
 
-/**
- * @result result = op1 * op2, each operand having seg_count limbs
- *
- * @note caller has to assure result arr has (seg_count * 2) limbs
- * @warning result_arr should not overlap with either of the operand arrays
- */
-void apz_mul_karatsuba_x64(u64 *result_arr, const u64 *op1_arr, const u64 *op2_arr, u64 seg_count);
+int8_t apz_abs_cmp(const u64 *op1, const u64 *op2, u64 size1, u64 size2);
 
+void apz_mul_x64(u64 *result_arr, const u64 *op1, const u64 *op2, u64 size1, u64 size2);
+
+void apz_base_compliment(u64 *op1, u64 size);
+
+#define KARATSUBA_THRESHOLD 1 // number of limbs/segments after which karatsuba dominates basecase mul in speed
+
+void apz_mul_karatsuba_x64(u64 *result, const u64 *op1, const u64 *op2, u64 size, u64 *workspace);
 #endif
 
 #ifdef LIBAPAC_IMPLEMENTATION
@@ -294,7 +270,7 @@ libapac_err apz_init_neg64(apz_t *result, size_t init_size, uint64_t init_value)
 
     result->num_array[0] = init_value;
     result->seg_in_use = 1 && init_value;
-    result->is_negative = APZ_NEG;
+    result->is_negative = APZ_NEG && init_value;
 
     return LIBAPAC_OKAY;
 }
@@ -377,7 +353,7 @@ libapac_err apz_reset(apz_t *result)
     APZ HIGH LEVEL BASIC ARITHMETIC FUNCTION DEFINITIONS (PLATFORM INDEPENDENT)
 */
 
-uint8_t apz_abs_greater(const apz_t *op1, const apz_t *op2)
+int8_t apz_abs_greater(const apz_t *op1, const apz_t *op2)
 {
     ASSERT(op1 && op2);
     ASSERT(op1->num_array && op2->num_array);
@@ -388,29 +364,24 @@ uint8_t apz_abs_greater(const apz_t *op1, const apz_t *op2)
     }
     else if (op2->seg_in_use > op1->seg_in_use)
     {
-        return 0;
+        return -1;
     }
     else
     {
-        uint64_t counter = op1->seg_in_use - 1;
+        u64 counter;
 
-        while (counter != 0)
+        for (counter = op1->seg_in_use - 1; counter >= 1; counter--)
         {
-            if (op1->num_array[counter] > op2->num_array[counter])
+            if (op1->num_array[counter] != op2->num_array[counter])
             {
-                return 1;
-            }
-            else if (op1->num_array[counter] < op2->num_array[counter])
-            {
-                return 0;
-            }
-            else
-            {
-                counter--;
+                goto is_greater_hl;
             }
         }
 
-        return (op1->num_array[counter] >= op2->num_array[counter] ? 1 : 0);
+        goto is_greater_hl;
+
+    is_greater_hl:
+        return (op1->num_array[counter] > op2->num_array[counter] ? 1 : (op1->num_array[counter] < op2->num_array[counter] ? -1 : 0));
     }
 }
 
@@ -424,15 +395,17 @@ libapac_err apz_hl_add(apz_t *result, const apz_t *op1, const apz_t *op2)
     uint8_t op_to_do = 0; // abs addition by default
     libapac_err ret_val = LIBAPAC_OKAY;
 
-    if (apz_abs_greater(op1, op2))
-    {
-        max_elem = op1;
-        min_elem = op2;
-    }
-    else
+    int8_t greater = apz_abs_greater(op1, op2);
+
+    if (greater == -1)
     {
         max_elem = op2;
         min_elem = op1;
+    }
+    else
+    {
+        max_elem = op1;
+        min_elem = op2;
     }
 
     if (max_elem->is_negative != min_elem->is_negative)
@@ -455,47 +428,25 @@ libapac_err apz_hl_add(apz_t *result, const apz_t *op1, const apz_t *op2)
         return ret_val;
     }
 
-    uint64_t counter = min_elem->seg_in_use;
     apz_reset(result);
 
     if (!op_to_do)
     {
-        carry = apz_abs_add_x64(result->num_array, max_elem->num_array, min_elem->num_array, min_elem->seg_in_use);
-
-        if (max_elem->seg_in_use > min_elem->seg_in_use)
-        {
-            while (counter < max_elem->seg_in_use)
-            {
-                carry = _addcarry_u64(carry, max_elem->num_array[counter], 0, &result->num_array[counter]);
-                counter++;
-            }
-        }
     }
     else
     {
         // carry variable functions as borrow
-
-        carry = apz_abs_sub_x64(result->num_array, max_elem->num_array, min_elem->num_array, min_elem->seg_in_use);
-
-        if (max_elem->seg_in_use > min_elem->seg_in_use)
-        {
-            while (counter < max_elem->seg_in_use)
-            {
-                carry = _subborrow_u64(carry, max_elem->num_array[counter], 0, &result->num_array[counter]);
-                counter++;
-            }
-        }
 
         // carry (AKA borrow) is never 1 after this loop (just how subtraction works)
     }
 
     if (carry)
     {
-        result->num_array[counter] += carry;
+        result->num_array[max_elem->seg_in_use] += carry;
     }
 
     result->is_negative = max_elem->is_negative;
-    result->seg_in_use = max_elem->seg_in_use + (carry & 1);
+    result->seg_in_use = max_elem->seg_in_use + (carry && 1);
 
     return ret_val;
 }
@@ -560,7 +511,7 @@ libapac_err apz_hl_add_ui(apz_t *result, const apz_t *op1, uint64_t value)
     }
 
     result->is_negative = APZ_ZPOS;
-    result->seg_in_use = op1->seg_in_use + (carry_or_borrow & 1);
+    result->seg_in_use = op1->seg_in_use + (carry_or_borrow && 1);
     return ret_val;
 }
 
@@ -574,15 +525,17 @@ libapac_err apz_hl_sub(apz_t *result, const apz_t *op1, const apz_t *op2)
     uint8_t op_to_do = 1; // abs subtraction by default
     libapac_err ret_val = LIBAPAC_OKAY;
 
-    if (apz_abs_greater(op1, op2))
-    {
-        max_elem = op1;
-        min_elem = op2;
-    }
-    else
+    int8_t greater = apz_abs_greater(op1, op2);
+
+    if (greater == -1)
     {
         max_elem = op2;
         min_elem = op1;
+    }
+    else
+    {
+        max_elem = op1;
+        min_elem = op2;
     }
 
     if (max_elem->is_negative != min_elem->is_negative)
@@ -604,45 +557,23 @@ libapac_err apz_hl_sub(apz_t *result, const apz_t *op1, const apz_t *op2)
         return ret_val;
     }
 
-    uint64_t counter = min_elem->seg_in_use;
     apz_reset(result);
 
     if (op_to_do) // do absolute subtraction
     {
-        borrow = apz_abs_sub_x64(result->num_array, max_elem->num_array, min_elem->num_array, min_elem->seg_in_use);
-
-        if (max_elem->seg_in_use > min_elem->seg_in_use)
-        {
-            while (counter < max_elem->seg_in_use)
-            {
-                borrow = _subborrow_u64(borrow, max_elem->num_array[counter], 0, &result->num_array[counter]);
-                counter++;
-            }
-        }
     }
     else // do absolute addition
     {
         // borrow variable functions as carry
-
-        borrow = apz_abs_add_x64(result->num_array, max_elem->num_array, min_elem->num_array, min_elem->seg_in_use);
-
-        if (max_elem->seg_in_use > min_elem->seg_in_use)
-        {
-            while (counter < max_elem->seg_in_use)
-            {
-                borrow = _addcarry_u64(borrow, max_elem->num_array[counter], 0, &result->num_array[counter]);
-                counter++;
-            }
-        }
     }
 
     if (borrow)
     {
-        result->num_array[counter] += borrow;
+        result->num_array[max_elem->seg_in_use] += borrow;
     }
 
-    result->seg_in_use = max_elem->seg_in_use;
-    result->is_negative = max_elem->is_negative;
+    result->seg_in_use = max_elem->seg_in_use + (borrow && 1);
+    result->is_negative = max_elem->is_negative && borrow;
     return ret_val;
 }
 
@@ -674,17 +605,13 @@ u64 inline apz_limit_exp(apz_t *op1, apz_t *op2)
     APZ LOW LEVEL FUNCTIONS (x64 ARCH) IMPLEMENTATION
 */
 
-uint8_t apz_abs_add_x64(u64 *result_arr, const u64 *op1_arr, const u64 *op2_arr, u64 seg_count)
+uint8_t apz_abs_add_x64(u64 *result, const u64 *op1, const u64 *op2, u64 seg_count)
 {
-    // call this function if the operands are same size in segments
+    uint8_t carry = 0;
 
-    uint64_t counter = 0; // counter to keep track of number of segments processed
-    uint8_t carry = 0;    // carry variable for carry propagation
-
-    while (counter < seg_count)
+    for (u64 i = 0; i < seg_count; i++)
     {
-        carry = _addcarry_u64(carry, op1_arr[counter], op2_arr[counter], &result_arr[counter]);
-        counter++;
+        carry = _addcarry_u64(carry, op1[i], op2[i], &result[i]);
     }
 
     return carry;
@@ -707,56 +634,185 @@ uint8_t apz_abs_add_ui_x64(u64 *result_arr, const u64 *op1_arr, u64 val, u64 seg
     return carry;
 }
 
-uint8_t apz_abs_sub_x64(u64 *result_arr, const u64 *op1_arr, const u64 *op2_arr, u64 seg_count)
+uint8_t apz_abs_sub_x64(u64 *result, const u64 *op1, const u64 *op2, u64 op1_size, u64 op2_size)
 {
-    // call this function if the operands are same size in segments
+    uint8_t borrow = 0;
+    ASSERT(op1_size >= op2_size);
+    for (u64 i = 0; i < op2_size; i++)
+        borrow = _subborrow_u64(borrow, op1[i], op2[i], &result[i]);
 
-    uint64_t counter = 0; // counter to keep track of number of segments processed
-    uint8_t borrow = 0;   // borrow variable for borrow propagation
+    for (u64 i = op2_size; i < op1_size; i++)
+        borrow = _subborrow_u64(borrow, op1[i], 0, &result[i]);
 
-    while (counter < seg_count)
-    {
-        borrow = _subborrow_u64(borrow, op1_arr[counter], op2_arr[counter], &result_arr[counter]);
-        counter++;
-    }
-
-    return borrow;
+    ASSERT(borrow == 0);
 }
 
-uint8_t _apz_abs_sub_x64(u64* result, u64* a, u64* b, u64 a_size, u64 b_size)
+void apz_mul_ui_x64(u64 *result, const u64 *op1, u64 op1_size, u64 val)
 {
-    u64 min_size = a_size < b_size ? a_size : b_size;
-    uint8_t borrow = 0;   
+    u64 low64 = 0, high64 = 0, temp_reg = 0;
+    uint8_t aux1 = 0, aux2 = 0;
 
-    u64 i = 0;
-    for(; i < min_size; i++)
-        borrow = _subborrow_u64(borrow, a[i], b[i], &result[i]);
+    for (u64 j = 0; j < op1_size; j++)
+    {
+        temp_reg = high64 + aux2;
+        low64 = _umul128(op1[j], val, &high64);
 
-    for(; i < a_size; i++)
-        borrow = _subborrow_u64(borrow, a[i], 0, &result[i]);
+        aux1 = _addcarry_u64(0, temp_reg, low64, &temp_reg);
+        aux1 = _addcarry_u64(aux1, high64, 0, &high64);
+        aux2 = _addcarry_u64(0, temp_reg, result[j], &result[j]);
+    }
 
-    for(; i < b_size; i++)
-        borrow = _subborrow_u64(borrow, 0, b[i], &result[i]);
-    
-    return borrow;
-}   
+    result[op1_size] += aux2 + high64;
+
+    return;
+}
 
 void apz_mul_basecase_x64(u64 *result_arr, const u64 *arr1, const u64 *arr2, u64 arr1_size, u64 arr2_size)
 {
     for (u64 i = 0; i < arr1_size; i++)
     {
         u64 low64 = 0, high64 = 0, temp_reg = 0;
-        uint8_t aux_carry = 0;
+        uint8_t aux1 = 0, aux2 = 0;
 
         for (u64 j = 0; j < arr2_size; j++)
         {
-            temp_reg = high64;
+            temp_reg = high64 + aux2;
             low64 = _umul128(arr1[i], arr2[j], &high64);
-            aux_carry = _addcarry_u64(aux_carry, temp_reg + low64, result_arr[i + j], &result_arr[i + j]);
+
+            aux1 = _addcarry_u64(0, temp_reg, low64, &temp_reg);
+            aux1 = _addcarry_u64(aux1, high64, 0, &high64);
+            aux2 = _addcarry_u64(0, temp_reg, result_arr[i + j], &result_arr[i + j]);
         }
 
-        result_arr[i + arr2_size] += aux_carry + high64;
+        result_arr[i + arr2_size] += aux2 + high64;
     }
+
+    return;
+}
+
+int8_t apz_abs_cmp(const u64 *op1, const u64 *op2, u64 size1, u64 size2)
+{
+    // returns the operator that is greater in absolute value
+    // assumes no top limbs are 0's
+
+    if (size1 > size2)
+    {
+        return 1;
+    }
+    else if (size2 > size1)
+    {
+        return -1;
+    }
+    else
+    {
+        u64 counter;
+
+        for (counter = size1 - 1; counter >= 1; counter--)
+        {
+            if (op1[counter] != op2[counter])
+            {
+                goto is_greater;
+            }
+        }
+
+        goto is_greater;
+
+    is_greater:
+        return (op1[counter] > op2[counter] ? 1 : (op1[counter] < op2[counter] ? -1 : 0));
+    }
+}
+
+u64 apz_trim(const u64 *op_arr, u64 size)
+{
+    u64 new_size = size;
+
+    while (new_size > 0 && op_arr[new_size - 1] == 0)
+    {
+        new_size--;
+    }
+
+    return new_size;
+}
+
+void apz_base_compliment(u64 *op1, u64 size)
+{
+    for (u64 i = size; i-- > 0;)
+        op1[i] = ~op1[i];
+
+    apz_abs_add_ui_x64(op1, op1, 1, size);
+}
+
+void apz_mul_karatsuba_x64(u64 *result, const u64 *op1, const u64 *op2, u64 size, u64 *workspace)
+{
+    static uint8_t depth = 0, alloc_ws = 0;
+
+    if (!depth && !workspace)
+    {
+        workspace = malloc_ptr(sizeof(u64) * 8 * ((size + 1) / 2));
+        memset(workspace, 0, sizeof(u64) * 8 * ((size + 1) / 2));
+        alloc_ws = 1;
+    }
+
+    if (size <= KARATSUBA_THRESHOLD)
+    {
+        apz_mul_basecase_x64(result, op1, op2, size, size);
+        return;
+    }
+
+    depth++;
+
+    u64 high = size >> 1;
+    u64 low = (size + 1) >> 1;
+
+    apz_mul_karatsuba_x64(result, op1, op2, low, workspace);
+    apz_mul_karatsuba_x64(result + low * 2, op1 + low, op2 + low, high, workspace);
+
+    u64 trim_a0 = apz_trim(op1, low);
+    u64 trim_a1 = apz_trim(op1 + low, high);
+
+    u64 trim_b0 = apz_trim(op1, low);
+    u64 trim_b1 = apz_trim(op1 + low, high);
+
+    int8_t cmp1 = apz_abs_cmp(op1, op1 + low, trim_a0, trim_a1);
+    int8_t cmp2 = apz_abs_cmp(op2, op2 + low, trim_b0, trim_b1);
+
+    // accumulate the results of |a0 - a1| and |b0 - b1| in workspace and workspace + low
+
+    if (cmp1 >= 0)
+        apz_abs_sub_x64(workspace, op1, op1 + low, low);
+    else
+        apz_abs_sub_x64(workspace, op1 + low, op1, low);
+
+    if (cmp2 >= 0)
+        apz_abs_sub_x64(workspace + low, op2, op2 + low, low);
+    else
+        apz_abs_sub_x64(workspace + low, op2 + low, op2, low);
+
+    apz_mul_karatsuba_x64(workspace + 2 * low, workspace, workspace + low, low, workspace + 4 * low);
+
+    if ((cmp1 >= 0 && cmp2 >= 0) || (cmp1 == -1 && cmp2 == -1))
+    {
+        apz_abs_sub_x64(workspace + low * 2, workspace + low * 2, result, low * 2);
+        apz_abs_sub_x64(workspace + low * 2, workspace + low * 2, result + low * 2, high * 2);
+        apz_base_compliment(workspace + low * 2, low * 2);
+    }
+    else
+    {
+        apz_abs_add_x64(workspace + low * 2, workspace + low * 2, result, low * 2);
+        apz_abs_add_x64(workspace + low * 2, workspace + low * 2, result + low * 2, high * 2);
+    }
+
+    uint8_t c = apz_abs_add_x64(result + low, result + low, workspace + low * 2, low * 2);
+    apz_abs_add_ui_x64(result + low * 3, result + low * 3, c, (2 * size - 3 * low));
+    depth--;
+
+    if (!depth && alloc_ws)
+    {
+        free_ptr(workspace);
+        alloc_ws = 0;
+    }
+
+    return;
 }
 
 #endif
