@@ -12,35 +12,47 @@ typedef enum ntt_tf_t
 
 } ntt_tf_t;
 
-#define CDLT64_TBL_SIZE     (60ULL)      /* Size of radix-4 unrolled codelet tables */
-#define NTT_PRIME_POW2      (43ULL)      /* Power of 2 in each prime of the table   */
-#define MIN_CONV_LEN		(1ULL << 6)  /* smallest codelet size is 64             */
-#define CRT3_MAX_CONV_LEN   (1ULL << 17) /* using the larger 3 primes               */
-#define CRT4_MAX_CONV_LEN   (1ULL << 42) /* when using all 4 primes                 */
+#define MAX_CONV_LEN_POW2   (42U)
+#define MIN_CONV_LEN_POW2   (6U)
+
+#define CDLT_TBL_SIZE       (60ULL)      /* Size of radix-4 unrolled codelet tables */
+
+#define NTT_PRIMES_POW2     (43ULL)      /* Power of 2 in each prime            */
+
+#define MIN_CONV_LEN		(1ULL << 6)  /* smallest transform size supported   */
+#define CRT3_MAX_CONV_LEN   (1ULL << 17) /* using the larger 3 primes           */
+#define CRT4_MAX_CONV_LEN   (1ULL << 42) /* when using all 4 primes             */
 
 typedef struct ntt_prime_t
 {
     apn_dig_t p;
     apn_dig_t magic, shift;
+
+    apn_dig_t twiddle[NTT_PRIMES_POW2];
+    apn_dig_t twiddle_inv[NTT_PRIMES_POW2];
+    apn_dig_t size_inv[NTT_PRIMES_POW2];
+
+    double prime_inv;
+
+    double cdltf64_cyclic_fwd[CDLT_TBL_SIZE];
+    double cdltf64_cyclic_inv[CDLT_TBL_SIZE];
+    double cdltf64_negacyclic_fwd[CDLT_TBL_SIZE];
+    double cdltf64_negacyclic_inv[CDLT_TBL_SIZE];
+
+// For x86-64 CPUs that support either 
+// AVX512-IFMA or AVX-IFMA
+// Not needed on ARM64 CPUs currently
+#if defined(APAC_WIN_X64) || defined(APAC_LINUX_X64) || defined(APAC_MACOS_X64)
+
     apn_dig_t prime_inv52;
     apn_dig_t r0;
 
-    double    prime_inv;
+    apn_dig_t cdltu64_cyclic_fwd[CDLT_TBL_SIZE];
+    apn_dig_t cdltu64_cyclic_inv[CDLT_TBL_SIZE];
+    apn_dig_t cdltu64_negacyclic_fwd[CDLT_TBL_SIZE];
+    apn_dig_t cdltu64_negacyclic_inv[CDLT_TBL_SIZE];
 
-    apn_dig_t twiddle[NTT_PRIME_POW2];
-    apn_dig_t twiddle_inv[NTT_PRIME_POW2];
-    apn_dig_t size_inv[NTT_PRIME_POW2];
-
-    double cdltf64_cyclic_fwd[CDLT64_TBL_SIZE];
-    double cdltf64_cyclic_inv[CDLT64_TBL_SIZE];
-    double cdltf64_negacyclic_fwd[CDLT64_TBL_SIZE];
-    double cdltf64_negacyclic_inv[CDLT64_TBL_SIZE];
-
-    apn_dig_t cdltu64_cyclic_fwd[CDLT64_TBL_SIZE];
-    apn_dig_t cdltu64_cyclic_inv[CDLT64_TBL_SIZE];
-    apn_dig_t cdltu64_negacyclic_fwd[CDLT64_TBL_SIZE];
-    apn_dig_t cdltu64_negacyclic_inv[CDLT64_TBL_SIZE];
-
+#endif
 } ntt_prime_t;
 
 static const ntt_prime_t NTT_PRIMES[4] =
@@ -55,10 +67,6 @@ static const ntt_prime_t NTT_PRIMES[4] =
         .magic = 0xBA2E8BA2E8B810EDULL,
 
         .shift = 46ULL,
-
-        .prime_inv   = 0X1.745D1745D1702P-47,
-        .prime_inv52 = 0x057FFFFFFFFFFULL,
-        .r0          = 0x03DD1745D1FBDULL,
 
         .twiddle =
         {
@@ -104,6 +112,8 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x057FFFFFFFA81ULL /* (2^36) */, 0x057FFFFFFFD41ULL /* (2^37) */, 0x057FFFFFFFEA1ULL /* (2^38) */, 0x057FFFFFFFF51ULL /* (2^39) */,
             0x057FFFFFFFFA9ULL /* (2^40) */, 0x057FFFFFFFFD5ULL /* (2^41) */, 0x057FFFFFFFFEBULL /* (2^42) */
         },
+
+        .prime_inv = 0X1.745D1745D1702P-47,
 
         .cdltf64_cyclic_fwd =
         {
@@ -181,6 +191,12 @@ static const ntt_prime_t NTT_PRIMES[4] =
                           0X1P+0 /* psi_inv^(0 ) */,  0X1.EF693B28E6BP+44 /* psi_inv^(12) */,  0X1.AD83DAF7E87P+44 /* psi_inv^(24) */, 0X1.4A3A6063F864P+46 /* psi_inv^(36) */
         },
 
+#if defined(APAC_WIN_X64) || defined(APAC_LINUX_X64) || defined(APAC_MACOS_X64)
+
+        .prime_inv52 = 0x057FFFFFFFFFFULL,
+        
+        .r0 = 0x03DD1745D1FBDULL,
+
         .cdltu64_cyclic_fwd =
         {
             0x0000000000001ULL /* psi^(0 ) */, 0x0554B9812E10BULL /* psi^(1 ) */, 0x02C670334B6F0ULL /* psi^(2 ) */, 0x03DD83035DF9FULL /* psi^(3 ) */,
@@ -256,6 +272,7 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x01D890EB4D876ULL /* psi_inv^(8 ) */, 0x01FD04E899DD1ULL /* psi_inv^(16) */, 0x01AD83DAF7E87ULL /* psi_inv^(24) */,
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x01EF693B28E6BULL /* psi_inv^(12) */, 0x01AD83DAF7E87ULL /* psi_inv^(24) */, 0x0528E9818FE19ULL /* psi_inv^(36) */
         }
+#endif
     },
 
     {
@@ -268,10 +285,6 @@ static const ntt_prime_t NTT_PRIMES[4] =
         .magic = 0x8D3DCB08D3DC14B3ULL,
 
         .shift = 47ULL,
-
-        .prime_inv   = 0X1.1A7B9611A7B83P-48,
-        .prime_inv52 = 0x0E7FFFFFFFFFFULL,
-        .r0          = 0x05C69EE5847D7ULL,
 
         .twiddle =
         {
@@ -317,6 +330,8 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x0E7FFFFFFF181ULL /* (2^36) */, 0x0E7FFFFFFF8C1ULL /* (2^37) */, 0x0E7FFFFFFFC61ULL /* (2^38) */, 0x0E7FFFFFFFE31ULL /* (2^39) */,
             0x0E7FFFFFFFF19ULL /* (2^40) */, 0x0E7FFFFFFFF8DULL /* (2^41) */, 0x0E7FFFFFFFFC7ULL /* (2^42) */
         },
+
+        .prime_inv = 0X1.1A7B9611A7B83P-48,
 
         .cdltf64_cyclic_fwd =
         {
@@ -394,6 +409,13 @@ static const ntt_prime_t NTT_PRIMES[4] =
                           0X1P+0 /* psi_inv^(0 ) */, 0X1.03550FFC3958P+46 /* psi_inv^(12) */, 0X1.6271B31D4138P+46 /* psi_inv^(24) */, 0X1.4E5F3D627E46P+47 /* psi_inv^(36) */
         },
 
+#if defined(APAC_WIN_X64) || defined(APAC_LINUX_X64) || defined(APAC_MACOS_X64)
+
+
+        .prime_inv52 = 0x0E7FFFFFFFFFFULL,
+
+        .r0 = 0x05C69EE5847D7ULL,
+
         .cdltu64_cyclic_fwd =
         {
             0x0000000000001ULL /* psi^(0 ) */, 0x00F382BB0866EULL /* psi^(1 ) */, 0x022027A2D98FDULL /* psi^(2 ) */, 0x0492CE36EA1DCULL /* psi^(3 ) */,
@@ -469,6 +491,7 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x082F917DA68C0ULL /* psi_inv^(8 ) */, 0x0E4B897D26006ULL /* psi_inv^(16) */, 0x0589C6CC7504EULL /* psi_inv^(24) */,
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x040D543FF0E56ULL /* psi_inv^(12) */, 0x0589C6CC7504EULL /* psi_inv^(24) */, 0x0A72F9EB13F23ULL /* psi_inv^(36) */
         }
+#endif
     },
 
     {
@@ -481,10 +504,6 @@ static const ntt_prime_t NTT_PRIMES[4] =
         .magic = 0x141414141414077BULL,
 
         .shift = 45ULL,
-
-        .prime_inv   = 0X1.4141414141407P-49,
-        .prime_inv52 = 0x197FFFFFFFFFFULL,
-        .r0          = 0x1575F5F5F5FC5ULL,
 
         .twiddle =
         {
@@ -530,6 +549,8 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x197FFFFFFE681ULL /* (2^36) */, 0x197FFFFFFF341ULL /* (2^37) */, 0x197FFFFFFF9A1ULL /* (2^38) */, 0x197FFFFFFFCD1ULL /* (2^39) */,
             0x197FFFFFFFE69ULL /* (2^40) */, 0x197FFFFFFFF35ULL /* (2^41) */, 0x197FFFFFFFF9BULL /* (2^42) */
         },
+
+        .prime_inv = 0X1.4141414141407P-49,
 
         .cdltf64_cyclic_fwd =
         {
@@ -607,6 +628,12 @@ static const ntt_prime_t NTT_PRIMES[4] =
                           0X1P+0 /* psi_inv^(0 ) */, 0X1.55BFE0E37D3BP+48 /* psi_inv^(12) */,  0X1.762DB82E7E9P+47 /* psi_inv^(24) */, 0X1.81BA6DDB5A75P+48 /* psi_inv^(36) */
         },
 
+#if defined(APAC_WIN_X64) || defined(APAC_LINUX_X64) || defined(APAC_MACOS_X64)
+
+        .prime_inv52 = 0x197FFFFFFFFFFULL,
+
+        .r0 = 0x1575F5F5F5FC5ULL,
+
         .cdltu64_cyclic_fwd =
         {
             0x0000000000001ULL /* psi^(0 ) */, 0x08E6082748B5CULL /* psi^(1 ) */, 0x0A5E8D6DB88C2ULL /* psi^(2 ) */, 0x1261D70B2CDD9ULL /* psi^(3 ) */,
@@ -682,6 +709,7 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x009AC91D27C77ULL /* psi_inv^(8 ) */, 0x0CBBC84E97DA7ULL /* psi_inv^(16) */, 0x0BB16DC173F48ULL /* psi_inv^(24) */,
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x155BFE0E37D3BULL /* psi_inv^(12) */, 0x0BB16DC173F48ULL /* psi_inv^(24) */, 0x181BA6DDB5A75ULL /* psi_inv^(36) */
         }
+#endif
     },
 
     {
@@ -694,10 +722,6 @@ static const ntt_prime_t NTT_PRIMES[4] =
         .magic = 0xDA740DA740DA16D9ULL,
 
         .shift = 49ULL,
-
-        .prime_inv   = 0X1.B4E81B4E81B43P-50,
-        .prime_inv52 = 0x257FFFFFFFFFFULL,
-        .r0          = 0x0FDF92C5F92F5ULL,
 
         .twiddle =
         {
@@ -743,6 +767,8 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x257FFFFFFDA81ULL /* (2^36) */, 0x257FFFFFFED41ULL /* (2^37) */, 0x257FFFFFFF6A1ULL /* (2^38) */, 0x257FFFFFFFB51ULL /* (2^39) */,
             0x257FFFFFFFDA9ULL /* (2^40) */, 0x257FFFFFFFED5ULL /* (2^41) */, 0x257FFFFFFFF6BULL /* (2^42) */
         },
+
+        .prime_inv = 0X1.B4E81B4E81B43P-50,
 
         .cdltf64_cyclic_fwd =
         {
@@ -820,6 +846,13 @@ static const ntt_prime_t NTT_PRIMES[4] =
                            0X1P+0 /* psi_inv^(0 ) */,  0X1.CFA31121BA24P+47 /* psi_inv^(12) */,   0X1.ABE5A592818P+42 /* psi_inv^(24) */,  0X1.9E176FEFD824P+46 /* psi_inv^(36) */
         },
 
+
+#if defined(APAC_WIN_X64) || defined(APAC_LINUX_X64) || defined(APAC_MACOS_X64)
+
+        .prime_inv52 = 0x257FFFFFFFFFFULL,
+
+        .r0 = 0x0FDF92C5F92F5ULL,
+
         .cdltu64_cyclic_fwd =
         {
             0x0000000000001ULL /* psi^(0 ) */, 0x20FD40FF6E876ULL /* psi^(1 ) */, 0x1D47AE4270ADEULL /* psi^(2 ) */, 0x1EC471E772396ULL /* psi^(3 ) */,
@@ -894,12 +927,14 @@ static const ntt_prime_t NTT_PRIMES[4] =
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x1E099516D8692ULL /* psi_inv^(4 ) */, 0x08F92CCCE1DD9ULL /* psi_inv^(8 ) */, 0x0E7D18890DD12ULL /* psi_inv^(12) */,
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x08F92CCCE1DD9ULL /* psi_inv^(8 ) */, 0x1CCAEDF2C6C0FULL /* psi_inv^(16) */, 0x006AF96964A06ULL /* psi_inv^(24) */,
             0x0000000000001ULL /* psi_inv^(0 ) */, 0x0E7D18890DD12ULL /* psi_inv^(12) */, 0x006AF96964A06ULL /* psi_inv^(24) */, 0x06785DBFBF609ULL /* psi_inv^(36) */
-        },
+        }
+#endif
     }
 
 };
 
-/* Garner CRT: mixed-radix inverses of running prime products -- 3 values */
+/* Garner CRT: mixed-radix inverses of running prime products */
+
 #define INV01  0x04071C71C71C9ULL
 #define INV02  0x09030DF6B0DFAULL
 #define INV03  0x1B2E49BD37A76ULL
